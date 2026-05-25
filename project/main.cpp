@@ -23,7 +23,9 @@ using namespace glm;
 #include "fbo.h"
 #include <vector>
 #include <glm/gtc/noise.hpp>
-
+#include <fstream>
+#include <sstream>
+#include <iostream>
 
 ///////////////////////////////////////////////////////////////////////////////
 // Various globals
@@ -44,7 +46,7 @@ bool g_isMouseDragging = false;
 GLuint shaderProgram;       // Shader for rendering the final image
 GLuint simpleShaderProgram; // Shader used to draw the shadow map
 GLuint backgroundProgram;
-
+GLuint terrainTessProgram = 0; // Shader program used for tessellated terrain rendering
 ///////////////////////////////////////////////////////////////////////////////
 // Environment
 ///////////////////////////////////////////////////////////////////////////////
@@ -95,10 +97,16 @@ GLuint terrainVBO = 0;
 GLuint terrainEBO = 0;
 int terrainIndexCount = 0;
 
-int terrainResolution = 128;
+int terrainResolution = 32; // lower it from 128 to 32 
 float terrainSize = 80.0f;
 float terrainHeight = 8.0f;
 float terrainNoiseScale = 0.035f;
+
+
+float minTessLevel = 2.0f;      // Lowest tessellation for distant terrain.
+float maxTessLevel = 12.0f;     // Highest tessellation for nearby terrain.
+float minTessDistance = 20.0f;  // Start using high tessellation near the camera.
+float maxTessDistance = 180.0f; // Fade down tessellation as distance increases.
 
 float fbm(vec2 p)
 {
@@ -219,6 +227,76 @@ void generateTerrain()
 
 	glBindVertexArray(0);
 }
+
+// Read a text file into a string so it can be compiled as a shader.
+std::string readTextFile(const std::string& path)
+{
+	std::ifstream file(path);
+	std::stringstream buffer;
+	buffer << file.rdbuf();
+	return buffer.str();
+}
+
+// Compile one shader stage from file and print any compiler errors.
+GLuint compileShaderStage(GLenum shaderType, const std::string& path)
+{
+	std::string source = readTextFile(path);
+	const char* sourcePtr = source.c_str();
+
+	GLuint shader = glCreateShader(shaderType);
+	glShaderSource(shader, 1, &sourcePtr, nullptr);
+	glCompileShader(shader);
+
+	GLint success = 0;
+	glGetShaderiv(shader, GL_COMPILE_STATUS, &success);
+
+	if(!success)
+	{
+		GLchar infoLog[2048];
+		glGetShaderInfoLog(shader, sizeof(infoLog), nullptr, infoLog);
+		std::cerr << "Shader compile error in " << path << ":\n" << infoLog << std::endl;
+	}
+
+	return shader;
+}
+
+// Create one OpenGL program that uses vertex, tessellation, and fragment stages.
+GLuint loadTerrainTessProgram(const std::string& vertPath,
+                              const std::string& tescPath,
+                              const std::string& tesePath,
+                              const std::string& fragPath)
+{
+	GLuint vert = compileShaderStage(GL_VERTEX_SHADER, vertPath);
+	GLuint tesc = compileShaderStage(GL_TESS_CONTROL_SHADER, tescPath);
+	GLuint tese = compileShaderStage(GL_TESS_EVALUATION_SHADER, tesePath);
+	GLuint frag = compileShaderStage(GL_FRAGMENT_SHADER, fragPath);
+
+	GLuint program = glCreateProgram();
+	glAttachShader(program, vert);
+	glAttachShader(program, tesc);
+	glAttachShader(program, tese);
+	glAttachShader(program, frag);
+	glLinkProgram(program);
+
+	GLint success = 0;
+	glGetProgramiv(program, GL_LINK_STATUS, &success);
+
+	if(!success)
+	{
+		GLchar infoLog[2048];
+		glGetProgramInfoLog(program, sizeof(infoLog), nullptr, infoLog);
+		std::cerr << "Program link error:\n" << infoLog << std::endl;
+	}
+
+	glDeleteShader(vert);
+	glDeleteShader(tesc);
+	glDeleteShader(tese);
+	glDeleteShader(frag);
+
+	return program;
+}
+
+
 void loadShaders(bool is_reload)
 {
 	GLuint shader = labhelper::loadShaderProgram("project/simple.vert", "project/simple.frag", is_reload);
@@ -238,6 +316,20 @@ void loadShaders(bool is_reload)
 	{
 		shaderProgram = shader;
 	}
+
+	// Load the tessellation shader program used for variable terrain detail.
+	GLuint tessProgram = loadTerrainTessProgram(
+		"project/terrain_tess.vert",
+		"project/terrain_tess.tesc",
+		"project/terrain_tess.tese",
+		"project/terrain_tess.frag"
+	);
+
+	if(tessProgram != 0)
+	{
+		terrainTessProgram = tessProgram;
+	}
+
 }
 
 
@@ -302,37 +394,34 @@ void drawTerrain(GLuint currentShaderProgram,
 {
 	glUseProgram(currentShaderProgram);
 
-	vec4 viewSpaceLightPosition = viewMatrix * vec4(lightPosition, 1.0f);
-	labhelper::setUniformSlow(currentShaderProgram, "point_light_color", point_light_color);
-	labhelper::setUniformSlow(currentShaderProgram, "point_light_intensity_multiplier",
-	                          point_light_intensity_multiplier);
-	labhelper::setUniformSlow(currentShaderProgram, "viewSpaceLightPosition", vec3(viewSpaceLightPosition));
-	labhelper::setUniformSlow(currentShaderProgram, "environment_multiplier", environment_multiplier);
-	labhelper::setUniformSlow(currentShaderProgram, "viewInverse", inverse(viewMatrix));
-
+	// Move the terrain slightly downward so the camera view is nicer.
 	mat4 terrainModelMatrix = glm::translate(vec3(0.0f, -8.0f, 0.0f));
 
-	labhelper::setUniformSlow(currentShaderProgram, "modelViewProjectionMatrix",
-	                          projectionMatrix * viewMatrix * terrainModelMatrix);
-	labhelper::setUniformSlow(currentShaderProgram, "modelViewMatrix",
-	                          viewMatrix * terrainModelMatrix);
-	labhelper::setUniformSlow(currentShaderProgram, "normalMatrix",
-	                          inverse(transpose(viewMatrix * terrainModelMatrix)));
+	// Send the matrices needed by the tessellation shaders.
+	labhelper::setUniformSlow(currentShaderProgram, "uModelMatrix", terrainModelMatrix);
+	labhelper::setUniformSlow(currentShaderProgram, "uViewMatrix", viewMatrix);
+	labhelper::setUniformSlow(currentShaderProgram, "uProjectionMatrix", projectionMatrix);
 
-	labhelper::setUniformSlow(currentShaderProgram, "material_color", vec3(0.25f, 0.5f, 0.2f));
-	labhelper::setUniformSlow(currentShaderProgram, "material_emission", 0.0f);
-	labhelper::setUniformSlow(currentShaderProgram, "has_emission_texture", 0);
-	labhelper::setUniformSlow(currentShaderProgram, "has_color_texture", 0);
-	// Temporary debug view for terrain mesh
-	//glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+	// Send simple lighting information.
+	labhelper::setUniformSlow(currentShaderProgram, "uLightPosition", lightPosition);
+	labhelper::setUniformSlow(currentShaderProgram, "uCameraPosition", cameraPosition);
+
+	// Send tessellation control settings.
+	labhelper::setUniformSlow(currentShaderProgram, "uMinTessLevel", minTessLevel);
+	labhelper::setUniformSlow(currentShaderProgram, "uMaxTessLevel", maxTessLevel);
+	labhelper::setUniformSlow(currentShaderProgram, "uMinTessDistance", minTessDistance);
+	labhelper::setUniformSlow(currentShaderProgram, "uMaxTessDistance", maxTessDistance);
+
+	// Tell OpenGL that each patch consists of 3 vertices (one triangle).
+	glPatchParameteri(GL_PATCH_VERTICES, 3);
 
 	glBindVertexArray(terrainVAO);
-	glDrawElements(GL_TRIANGLES, terrainIndexCount, GL_UNSIGNED_INT, 0);
-	glBindVertexArray(0);
-// Restore normal filled rendering
-	// /glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
-}
 
+	// Draw the terrain as tessellated patches instead of plain triangles.
+	glDrawElements(GL_PATCHES, terrainIndexCount, GL_UNSIGNED_INT, 0);
+
+	glBindVertexArray(0);
+}
 ///////////////////////////////////////////////////////////////////////////////
 /// This function is used to draw the main objects on the scene
 ///////////////////////////////////////////////////////////////////////////////
@@ -433,7 +522,8 @@ void display(void)
 	}
 	{
 		labhelper::perf::Scope s( "Terrain" );
-		drawTerrain(shaderProgram, viewMatrix, projMatrix);
+		drawTerrain(terrainTessProgram, viewMatrix, projMatrix);
+		// drawTerrain(shaderProgram, viewMatrix, projMatrix);
 	}
 	// debugDrawLight(viewMatrix, projMatrix, vec3(lightPosition));
 
