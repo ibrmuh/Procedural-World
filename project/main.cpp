@@ -83,19 +83,19 @@ mat4 fighterModelMatrix;
 
 void loadShaders(bool is_reload)
 {
-	GLuint shader = labhelper::loadShaderProgram("../project/simple.vert", "../project/simple.frag", is_reload);
+	GLuint shader = labhelper::loadShaderProgram("project/simple.vert", "project/simple.frag", is_reload);
 	if(shader != 0)
 	{
 		simpleShaderProgram = shader;
 	}
 
-	shader = labhelper::loadShaderProgram("../project/background.vert", "../project/background.frag", is_reload);
+	shader = labhelper::loadShaderProgram("project/background.vert", "project/background.frag", is_reload);
 	if(shader != 0)
 	{
 		backgroundProgram = shader;
 	}
 
-	shader = labhelper::loadShaderProgram("../project/shading.vert", "../project/shading.frag", is_reload);
+	shader = labhelper::loadShaderProgram("project/shading.vert", "project/shading.frag", is_reload);
 	if(shader != 0)
 	{
 		shaderProgram = shader;
@@ -118,9 +118,9 @@ void initialize()
 	///////////////////////////////////////////////////////////////////////
 	// Load models and set up model matrices
 	///////////////////////////////////////////////////////////////////////
-	fighterModel = labhelper::loadModelFromOBJ("../scenes/NewShip.obj");
-	landingpadModel = labhelper::loadModelFromOBJ("../scenes/landingpad.obj");
-	sphereModel = labhelper::loadModelFromOBJ("../scenes/sphere.obj");
+	fighterModel = labhelper::loadModelFromOBJ("scenes/NewShip.obj");
+	landingpadModel = labhelper::loadModelFromOBJ("scenes/landingpad.obj");
+	sphereModel = labhelper::loadModelFromOBJ("scenes/sphere.obj");
 
 	roomModelMatrix = mat4(1.0f);
 	fighterModelMatrix = translate(15.0f * worldUp);
@@ -129,7 +129,7 @@ void initialize()
 	///////////////////////////////////////////////////////////////////////
 	// Load environment map
 	///////////////////////////////////////////////////////////////////////
-	environmentMap = labhelper::loadHdrTexture("../scenes/envmaps/" + envmap_base_name + ".hdr");
+	environmentMap = labhelper::loadHdrTexture("scenes/envmaps/" + envmap_base_name + ".hdr");
 
 
 	glEnable(GL_DEPTH_TEST); // enable Z-buffering
