@@ -7,3 +7,33 @@ build/
 .ycm_extra_conf.py*
 .vscode/settings.json
 /tools/clean
+
+# Build folders
+/build/
+/build-x64/
+
+# CMake generated files
+CMakeCache.txt
+cmake_install.cmake
+CMakeFiles/
+CTestTestfile.cmake
+install_manifest.txt
+
+# Visual Studio / VS Code generated files
+.vs/
+*.sln
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
+
+# Compiled binaries and intermediate files
+*.obj
+*.exe
+*.lib
+*.dll
+*.pdb
+*.ilk
+*.exp
+
+# User-specific files
+*.user
