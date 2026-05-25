@@ -21,6 +21,8 @@ using namespace glm;
 #include <Model.h>
 #include "hdr.h"
 #include "fbo.h"
+#include <vector>
+#include <glm/gtc/noise.hpp>
 
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -64,8 +66,8 @@ float point_light_intensity_multiplier = 10000.0f;
 ///////////////////////////////////////////////////////////////////////////////
 // Camera parameters.
 ///////////////////////////////////////////////////////////////////////////////
-vec3 cameraPosition(-70.0f, 50.0f, 70.0f);
-vec3 cameraDirection = normalize(vec3(0.0f) - cameraPosition);
+vec3 cameraPosition(0.0f, 120.0f, 220.0f);
+vec3 cameraDirection = normalize(vec3(0.0f,20.0f,0.0f) - cameraPosition);
 float cameraSpeed = 10.f;
 
 vec3 worldUp(0.0f, 1.0f, 0.0f);
@@ -81,6 +83,142 @@ mat4 roomModelMatrix;
 mat4 landingPadModelMatrix;
 mat4 fighterModelMatrix;
 
+struct TerrainVertex
+{
+	vec3 position;
+	vec3 normal;
+	vec2 texCoord;
+};
+
+GLuint terrainVAO = 0;
+GLuint terrainVBO = 0;
+GLuint terrainEBO = 0;
+int terrainIndexCount = 0;
+
+int terrainResolution = 128;
+float terrainSize = 80.0f;
+float terrainHeight = 8.0f;
+float terrainNoiseScale = 0.035f;
+
+float fbm(vec2 p)
+{
+	float value = 0.0f;
+	float amplitude = 1.0f;
+	float frequency = 1.0f;
+
+	for(int i = 0; i < 5; ++i)
+	{
+		value += amplitude * glm::perlin(p * frequency);
+		frequency *= 2.0f;
+		amplitude *= 0.5f;
+	}
+
+	return value;
+}
+void generateTerrain()
+{
+	if(terrainVAO != 0)
+	{
+		glDeleteVertexArrays(1, &terrainVAO);
+		glDeleteBuffers(1, &terrainVBO);
+		glDeleteBuffers(1, &terrainEBO);
+	}
+
+	int N = terrainResolution;
+	float halfSize = terrainSize * 0.5f;
+	float step = terrainSize / float(N - 1);
+
+	std::vector<TerrainVertex> vertices(N * N);
+	std::vector<float> heights(N * N);
+	std::vector<unsigned int> indices;
+
+	auto idx = [N](int x, int z) { return z * N + x; };
+
+	for(int z = 0; z < N; ++z)
+	{
+		for(int x = 0; x < N; ++x)
+		{
+			float worldX = -halfSize + x * step;
+			float worldZ = -halfSize + z * step;
+
+			float h = terrainHeight * fbm(vec2(worldX, worldZ) * terrainNoiseScale);
+			heights[idx(x, z)] = h;
+		}
+	}
+
+	for(int z = 0; z < N; ++z)
+	{
+		for(int x = 0; x < N; ++x)
+		{
+			float worldX = -halfSize + x * step;
+			float worldZ = -halfSize + z * step;
+			float h = heights[idx(x, z)];
+
+			int xl = std::max(x - 1, 0);
+			int xr = std::min(x + 1, N - 1);
+			int zd = std::max(z - 1, 0);
+			int zu = std::min(z + 1, N - 1);
+
+			float hL = heights[idx(xl, z)];
+			float hR = heights[idx(xr, z)];
+			float hD = heights[idx(x, zd)];
+			float hU = heights[idx(x, zu)];
+
+			vec3 normal = normalize(vec3(hL - hR, 2.0f * step, hD - hU));
+
+			TerrainVertex v;
+			v.position = vec3(worldX, h, worldZ);
+			v.normal = normal;
+			v.texCoord = vec2(float(x) / float(N - 1), float(z) / float(N - 1));
+
+			vertices[idx(x, z)] = v;
+		}
+	}
+
+	for(int z = 0; z < N - 1; ++z)
+	{
+		for(int x = 0; x < N - 1; ++x)
+		{
+			unsigned int i0 = idx(x, z);
+			unsigned int i1 = idx(x + 1, z);
+			unsigned int i2 = idx(x, z + 1);
+			unsigned int i3 = idx(x + 1, z + 1);
+
+			indices.push_back(i0);
+			indices.push_back(i2);
+			indices.push_back(i1);
+
+			indices.push_back(i1);
+			indices.push_back(i2);
+			indices.push_back(i3);
+		}
+	}
+
+	terrainIndexCount = (int)indices.size();
+
+	glGenVertexArrays(1, &terrainVAO);
+	glGenBuffers(1, &terrainVBO);
+	glGenBuffers(1, &terrainEBO);
+
+	glBindVertexArray(terrainVAO);
+
+	glBindBuffer(GL_ARRAY_BUFFER, terrainVBO);
+	glBufferData(GL_ARRAY_BUFFER, vertices.size() * sizeof(TerrainVertex), vertices.data(), GL_STATIC_DRAW);
+
+	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, terrainEBO);
+	glBufferData(GL_ELEMENT_ARRAY_BUFFER, indices.size() * sizeof(unsigned int), indices.data(), GL_STATIC_DRAW);
+
+	glEnableVertexAttribArray(0);
+	glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(TerrainVertex), (void*)offsetof(TerrainVertex, position));
+
+	glEnableVertexAttribArray(1);
+	glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(TerrainVertex), (void*)offsetof(TerrainVertex, normal));
+
+	glEnableVertexAttribArray(2);
+	glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(TerrainVertex), (void*)offsetof(TerrainVertex, texCoord));
+
+	glBindVertexArray(0);
+}
 void loadShaders(bool is_reload)
 {
 	GLuint shader = labhelper::loadShaderProgram("project/simple.vert", "project/simple.frag", is_reload);
@@ -114,7 +252,7 @@ void initialize()
 	//		Load Shaders
 	///////////////////////////////////////////////////////////////////////
 	loadShaders(false);
-
+	generateTerrain();
 	///////////////////////////////////////////////////////////////////////
 	// Load models and set up model matrices
 	///////////////////////////////////////////////////////////////////////
@@ -157,6 +295,43 @@ void drawBackground(const mat4& viewMatrix, const mat4& projectionMatrix)
 	labhelper::drawFullScreenQuad();
 }
 
+// Terrain draw Function
+void drawTerrain(GLuint currentShaderProgram,
+                 const mat4& viewMatrix,
+                 const mat4& projectionMatrix)
+{
+	glUseProgram(currentShaderProgram);
+
+	vec4 viewSpaceLightPosition = viewMatrix * vec4(lightPosition, 1.0f);
+	labhelper::setUniformSlow(currentShaderProgram, "point_light_color", point_light_color);
+	labhelper::setUniformSlow(currentShaderProgram, "point_light_intensity_multiplier",
+	                          point_light_intensity_multiplier);
+	labhelper::setUniformSlow(currentShaderProgram, "viewSpaceLightPosition", vec3(viewSpaceLightPosition));
+	labhelper::setUniformSlow(currentShaderProgram, "environment_multiplier", environment_multiplier);
+	labhelper::setUniformSlow(currentShaderProgram, "viewInverse", inverse(viewMatrix));
+
+	mat4 terrainModelMatrix = glm::translate(vec3(0.0f, -8.0f, 0.0f));
+
+	labhelper::setUniformSlow(currentShaderProgram, "modelViewProjectionMatrix",
+	                          projectionMatrix * viewMatrix * terrainModelMatrix);
+	labhelper::setUniformSlow(currentShaderProgram, "modelViewMatrix",
+	                          viewMatrix * terrainModelMatrix);
+	labhelper::setUniformSlow(currentShaderProgram, "normalMatrix",
+	                          inverse(transpose(viewMatrix * terrainModelMatrix)));
+
+	labhelper::setUniformSlow(currentShaderProgram, "material_color", vec3(0.25f, 0.5f, 0.2f));
+	labhelper::setUniformSlow(currentShaderProgram, "material_emission", 0.0f);
+	labhelper::setUniformSlow(currentShaderProgram, "has_emission_texture", 0);
+	labhelper::setUniformSlow(currentShaderProgram, "has_color_texture", 0);
+	// Temporary debug view for terrain mesh
+	//glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+
+	glBindVertexArray(terrainVAO);
+	glDrawElements(GL_TRIANGLES, terrainIndexCount, GL_UNSIGNED_INT, 0);
+	glBindVertexArray(0);
+// Restore normal filled rendering
+	// /glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+}
 
 ///////////////////////////////////////////////////////////////////////////////
 /// This function is used to draw the main objects on the scene
@@ -257,10 +432,10 @@ void display(void)
 		drawBackground(viewMatrix, projMatrix);
 	}
 	{
-		labhelper::perf::Scope s( "Scene" );
-		drawScene( shaderProgram, viewMatrix, projMatrix, lightViewMatrix, lightProjMatrix );
+		labhelper::perf::Scope s( "Terrain" );
+		drawTerrain(shaderProgram, viewMatrix, projMatrix);
 	}
-	debugDrawLight(viewMatrix, projMatrix, vec3(lightPosition));
+	// debugDrawLight(viewMatrix, projMatrix, vec3(lightPosition));
 
 }
 
